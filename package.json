@@ -1,0 +1,16 @@
+{
+  "name": "subsonic-aura-shim",
+  "version": "1.0.0",
+  "description": "Tiny app to provide an AURA interface to a Subsonic server.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Jake Barszcz",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.0",
+    "express": "^4.14.0",
+    "node-fetch": "^1.6.0"
+  }
+}

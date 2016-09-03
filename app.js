@@ -32,7 +32,7 @@ router.get('/tracks/:id', function (req, res) {
     .then(ssRes => ssRes.json())
     .then(json => {
       const song = json['subsonic-response']['song'];
-      const data = {
+      const attributes = {
         id: song.id,
         title: song.title,
         artist: song.artist,
@@ -45,7 +45,11 @@ router.get('/tracks/:id', function (req, res) {
         bitrate: song.bitRate,
         size: song.size,
       };
-      res.json({data});
+      res.json({data: {
+        type: 'tracks',
+        id,
+        attributes
+      }});
     });
 });
 

@@ -1,52 +1,47 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const cors = require('cors');
-const loki = require('lokijs');
+const Loki = require('lokijs');
 const _ = require('lodash/fp');
-
+const queryString = require('query-string');
 const { username, password, subsonicServer } = require('./config');
+
 const app = express();
 
-const db = new loki('auradb.json');
+const db = new Loki('auradb.json');
 const tracksColl = db.getCollection('tracks') || db.addCollection('tracks', {
   indices: ['id'],
 });
 
-const getJson = res => res.json();
+function subsonicRequest(endpoint, id) {
+  const qs = queryString.stringify({
+    u: username,
+    p: password,
+    v: '1.14.0',
+    c: 'shim',
+    f: 'json',
+    id,
+  });
+  const url = `${subsonicServer}/${endpoint}.view?${qs}`;
+  return fetch(url).then(res => res.json());
+}
 
 // worst promise chain ever. Blame Subsonic.
-fetch(`${subsonicServer}/getArtists.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json`)
-  .then(getJson)
+subsonicRequest('getArtists')
   .then(json => json['subsonic-response'].artists.index)
-  .then(index => (
-    _.flow(
-      _.flatMap('artist'),
-      _.map('id')
-    )(index)
-  ))
+  .then(_.flow(_.flatMap('artist'), _.map('id')))
   .then(artistIds => {
-    const artistPromises = artistIds.map(id => (
-      fetch(`${subsonicServer}/getArtist.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
-        .then(getJson)
-      )
-    );
+    const artistPromises = artistIds.map(id => subsonicRequest('getArtist', id));
     return Promise.all(artistPromises);
   })
-  .then(artists => (
-    _.flow(
-      _.flatMap(artistJson => artistJson['subsonic-response'].artist.album),
-      _.map('id')
-    )(artists)
-  ))
+  .then(_.flow(
+    _.flatMap(artistJson => artistJson['subsonic-response'].artist.album),
+    _.map('id'))
+  )
   .then(albumIds => {
-    const albumPromises = albumIds.map(id => (
-      fetch(`${subsonicServer}/getAlbum.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
-        .then(getJson)
-      )
-    );
+    const albumPromises = albumIds.map(id => subsonicRequest('getAlbum', id));
     return Promise.all(albumPromises);
   })
-  .then(_.tap(() => console.log("here")))
   .then(albums => {
     const tracks = _.flow(
       _.flatMap(albumJson => albumJson['subsonic-response'].album.song),
@@ -65,7 +60,7 @@ fetch(`${subsonicServer}/getArtists.view?u=${username}&p=${password}&v=1.14.0&c=
           size: song.size,
         }
       ))
-    )(albums)
+    )(albums);
     tracksColl.insert(tracks);
   });
 
@@ -76,7 +71,7 @@ router.use((req, res, next) => {
   next();
 });
 
-router.get('/server', function (req, res) {
+router.get('/server', (req, res) => {
   const data = {
     type: 'server',
     id: '0',
@@ -85,24 +80,24 @@ router.get('/server', function (req, res) {
       server: 'subsonic-aura-shim',
       'server-version': '1.0.0',
       'auth-required': true,
-    }
-  }
-  res.json({data})
+    },
+  };
+  res.json({ data });
 });
 
-router.get('/tracks', function (req, res) {
+router.get('/tracks', (req, res) => {
   const results = tracksColl.where(_.T);
   res.json({
     data: {
       attributes: results,
       type: 'tracks',
-    }
+    },
   });
 });
 
-router.get('/tracks/:id', function (req, res) {
+router.get('/tracks/:id', (req, res) => {
   const id = req.params.id;
-  const track = tracksColl.findOne({id});
+  const track = tracksColl.findOne({ id });
   delete track.meta;
   res.json({
     data: {
@@ -111,18 +106,18 @@ router.get('/tracks/:id', function (req, res) {
       id,
     },
   });
-})
+});
 
 // This doesn't work super great yet,
 // but I don't feel like fighting Git to not check it in.
-router.get('/tracks/:id/audio', function (req, res) {
+router.get('/tracks/:id/audio', (req, res) => {
   const id = req.params.id;
   fetch(`${subsonicServer}/stream.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
     .then(ssRes => {
       const contentType = ssRes.headers.get('content-type');
       const duration = ssRes.headers.get('x-content-duration');
       res.set('Content-Type', contentType);
-      res.set('Content-Disposition', 'attachment')
+      res.set('Content-Disposition', 'attachment');
       res.set('X-Content-Duration', duration);
       return ssRes.buffer();
     })

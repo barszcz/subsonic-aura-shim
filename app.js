@@ -1,9 +1,73 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const cors = require('cors');
-const { username, password, subsonicServer } = require('./config');
+const loki = require('lokijs');
+const _ = require('lodash/fp');
 
+const { username, password, subsonicServer } = require('./config');
 const app = express();
+
+const db = new loki('auradb.json');
+const tracksColl = db.getCollection('tracks') || db.addCollection('tracks', {
+  indices: ['id'],
+});
+
+const getJson = res => res.json();
+
+// worst promise chain ever. Blame Subsonic.
+fetch(`${subsonicServer}/getArtists.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json`)
+  .then(getJson)
+  .then(json => json['subsonic-response'].artists.index)
+  .then(index => (
+    _.flow(
+      _.flatMap('artist'),
+      _.map('id')
+    )(index)
+  ))
+  .then(artistIds => {
+    const artistPromises = artistIds.map(id => (
+      fetch(`${subsonicServer}/getArtist.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
+        .then(getJson)
+      )
+    );
+    return Promise.all(artistPromises);
+  })
+  .then(artists => (
+    _.flow(
+      _.flatMap(artistJson => artistJson['subsonic-response'].artist.album),
+      _.map('id')
+    )(artists)
+  ))
+  .then(albumIds => {
+    const albumPromises = albumIds.map(id => (
+      fetch(`${subsonicServer}/getAlbum.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
+        .then(getJson)
+      )
+    );
+    return Promise.all(albumPromises);
+  })
+  .then(_.tap(() => console.log("here")))
+  .then(albums => {
+    const tracks = _.flow(
+      _.flatMap(albumJson => albumJson['subsonic-response'].album.song),
+      _.map(song => (
+        {
+          id: song.id,
+          title: song.title,
+          artist: song.artist,
+          album: song.album,
+          track: song.track,
+          year: song.year,
+          genre: song.genre || '',
+          type: song.contentType,
+          duration: song.duration,
+          bitrate: song.bitRate,
+          size: song.size,
+        }
+      ))
+    )(albums)
+    tracksColl.insert(tracks);
+  });
 
 const router = express.Router();
 router.use(cors());
@@ -26,30 +90,44 @@ router.get('/server', function (req, res) {
   res.json({data})
 });
 
+router.get('/tracks', function (req, res) {
+  const results = tracksColl.where(_.T);
+  res.json({
+    data: {
+      attributes: results,
+      type: 'tracks',
+    }
+  });
+});
+
 router.get('/tracks/:id', function (req, res) {
   const id = req.params.id;
-  fetch(`${subsonicServer}/getSong.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
-    .then(ssRes => ssRes.json())
-    .then(json => {
-      const song = json['subsonic-response']['song'];
-      const attributes = {
-        id: song.id,
-        title: song.title,
-        artist: song.artist,
-        album: song.album,
-        track: song.track,
-        year: song.year,
-        genre: song.genre,
-        type: song.contentType,
-        duration: song.duration,
-        bitrate: song.bitRate,
-        size: song.size,
-      };
-      res.json({data: {
-        type: 'tracks',
-        id,
-        attributes
-      }});
+  const track = tracksColl.findOne({id});
+  delete track.meta;
+  res.json({
+    data: {
+      attributes: track,
+      type: 'tracks',
+      id,
+    },
+  });
+})
+
+// This doesn't work super great yet,
+// but I don't feel like fighting Git to not check it in.
+router.get('/tracks/:id/audio', function (req, res) {
+  const id = req.params.id;
+  fetch(`${subsonicServer}/stream.view?u=${username}&p=${password}&v=1.14.0&c=shim&f=json&id=${id}`)
+    .then(ssRes => {
+      const contentType = ssRes.headers.get('content-type');
+      const duration = ssRes.headers.get('x-content-duration');
+      res.set('Content-Type', contentType);
+      res.set('Content-Disposition', 'attachment')
+      res.set('X-Content-Duration', duration);
+      return ssRes.buffer();
+    })
+    .then(buf => {
+      res.send(buf);
     });
 });
 
